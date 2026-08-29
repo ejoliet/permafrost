@@ -9,18 +9,15 @@ context):
 docker build -f deploy/docker/Dockerfile -t permafrost:latest .
 ```
 
-> **Add a `.dockerignore` first.** Without one, the build context is the whole
-> working tree — including `target/`, which is several GB after a local
-> `cargo build`, and `web/vendor/`, which is ~74 MB of DuckDB wasm. None of it
-> is used by the image. Create `.dockerignore` at the **repository root**:
+> **The repository root ships a `.dockerignore`; keep it.** Without one the
+> build context is the whole working tree — `target/` alone is several GB after
+> a local `cargo build`, and `web/vendor/` is ~74 MB of DuckDB wasm. None of it
+> is used by the image. With it, the context is ~19 kB.
 >
-> ```gitignore
-> target/
-> web/vendor/
-> .git/
-> .omc/
-> data/
-> ```
+> It excludes `**/target/`, not `target/`, and the difference is not cosmetic:
+> `rules/examples/*` and `crates/web-node` are separate cargo roots with their
+> own `target/`, and a bare `target/` matches only the one at the context root.
+> Getting that wrong sent 1.1 GB to the daemon.
 
 ## Run
 

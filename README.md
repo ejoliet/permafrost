@@ -2,8 +2,10 @@
 
 > A Loki-compatible log endpoint that freezes your logs into Parquet and serves them peer-to-peer over iroh — Slack alert links open a browser SQL explorer with no Grafana, no VPN, no query server.
 
-**Type**: RDD Type A — spec for agent implementation. No code exists yet.
+**Type**: RDD Type A — spec for agent implementation. **Implemented**; this document remains the spec, with resolutions recorded inline under §Open Questions and §Acceptance Criteria.
 **Author**: Emmanuel Joliet (`ejoliet`) · **Status**: Draft · **License**: MIT
+
+Jump to [Build](#build) · [Quick Start](#quick-start) — both verified against the current tree.
 
 ---
 
@@ -102,27 +104,175 @@ permafrost/
 
 ## Prerequisites
 
-- Rust stable ≥ 1.85, `wasm32-unknown-unknown` target, `wasm-pack` (for `web-node`)
-- A Slack incoming webhook URL
-- A log source: existing promtail/Alloy, or the included example config
-- iroh public relays (n0-hosted) suffice for the demo; self-hosted relay optional later
+- Rust stable ≥ 1.85 (2024 edition). `wasm32-unknown-unknown` and `wasm-pack` only if you build the browser page.
+- A Slack incoming webhook URL — optional; §Quick Start substitutes a local stand-in.
+- A log source: existing promtail/Alloy, or just `curl`, as below.
+- iroh public relays (n0-hosted) suffice; a self-hosted relay is a config change, not a code change.
+- Optional: the `duckdb` CLI, so `tests/push_to_duckdb.rs` asserts its DuckDB half instead of skipping it.
 
 ---
 
-## Quick Start (target UX, post-implementation)
+## Build
 
-1. Run the collector:
-   ```bash
-   PERMAFROST_SLACK_WEBHOOK=https://hooks.slack.com/services/... \
-   permafrost --data-dir ./data --rules-dir ./rules
-   ```
-2. Point promtail at it (one line):
-   ```yaml
-   clients:
-     - url: http://collector-host:3100/loki/api/v1/push
-   ```
-3. Trigger a rule (e.g. log a line matching the example regex). A Slack message appears with a link.
-4. Click the link. The browser fetches segments over iroh and opens a pre-filled DuckDB SQL editor scoped to the alert's labels and time window.
+All commands run from the repository root.
+
+```bash
+# Toolchain, once. Only needed for steps 2 and 3.
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack
+
+# 1. The collector  ->  target/release/permafrost   (42 MB)
+cargo build --release
+
+# 2. The example rule  ->  rules/examples/regex-match/target/wasm32-unknown-unknown/release/regex_match.wasm
+(cd rules/examples/regex-match && cargo build --release --target wasm32-unknown-unknown)
+
+# 3. Browser assets, only for the query page
+./web/fetch-vendor.sh      # duckdb-wasm  ->  web/vendor/duckdb/    (~74 MB download)
+./web/build-web-node.sh    # iroh peer    ->  web/vendor/web_node/  (wasm-pack)
+```
+
+| Step | Required for | Skip it if |
+|---|---|---|
+| 1 | everything | never |
+| 2 | firing alerts | you supply your own `.wasm` rules |
+| 3 | the browser query page | you want ingest and alerting only |
+
+Step 1 takes roughly 20 minutes from cold — nearly all of it wasmtime and its
+Cranelift backend. Incremental rebuilds are seconds.
+
+> **macOS.** `ring`, pulled in by iroh, compiles C for `wasm32`, and Apple's
+> bundled clang cannot target it. `web/build-web-node.sh` points
+> `CC_wasm32_unknown_unknown` at Homebrew LLVM (`brew install llvm`) and fails
+> with a readable message if that clang is also incapable. Linux clang works
+> unmodified, so CI needs no special casing.
+
+Tests: `cargo test --workspace` (55 tests). `crates/web-node` and
+`rules/examples/*` are separate cargo roots excluded from the workspace — they
+are wasm-only and would break a native `--workspace` run — so `cargo fmt`,
+`clippy` and `test` at the root do not cover them. CI checks each root
+explicitly; see `.github/workflows/ci.yml`.
+
+---
+
+## Quick Start
+
+The whole loop on one machine in about two minutes: no Slack workspace, no
+promtail, no deployment. A local HTTP server stands in for the webhook so you
+can read the alert payload yourself. Needs build steps 1–3 above.
+
+**1. Stand up a fake Slack webhook.**
+
+```bash
+cat > /tmp/fake-webhook.py <<'PY'
+import http.server, sys
+
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        print(self.rfile.read(int(self.headers["content-length"])).decode())
+        sys.stdout.flush()
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, *a): pass
+
+http.server.HTTPServer(("127.0.0.1", 9099), H).serve_forever()
+PY
+python3 /tmp/fake-webhook.py &
+```
+
+**2. Run the collector** with the example rule in place.
+
+```bash
+mkdir -p demo/data demo/rules
+cp rules/examples/regex-match/target/wasm32-unknown-unknown/release/regex_match.wasm demo/rules/
+
+PERMAFROST_SLACK_WEBHOOK="http://127.0.0.1:9099/services/T0/B0/FAKE" \
+PERMAFROST_UI_BASE_URL="http://127.0.0.1:8080/" \
+./target/release/permafrost \
+  --listen 127.0.0.1:3100 \
+  --data-dir demo/data \
+  --rules-dir demo/rules \
+  --segment-max-age 5s
+```
+
+`--segment-max-age 5s` overrides the 1 h default so the first segment appears
+while you are watching. Startup looks like this — note that the webhook URL is
+redacted, as it is everywhere else:
+
+```
+INFO permafrost_collector::alert: slack alerts enabled target_url=http://127.0.0.1:9099/<redacted>
+INFO permafrost_collector::rules: rules loaded count=1 rules={"regex_match"}
+INFO permafrost_collector::p2p: iroh endpoint listening node=0e07baa5b00948c2…
+INFO permafrost: permafrost ready listen=127.0.0.1:3100 data_dir=demo/data node=0e07baa5b00948c2…
+```
+
+**3. Push a log line** the example rule matches. In a second terminal — the
+collector is running in the foreground. The rule's pattern is
+`(?i)\b(panic|fatal|out of memory)\b`, word-bounded, so `panicked` does *not*
+match:
+
+```bash
+NOW=$(python3 -c "import time;print(int(time.time()*1e9))")
+curl -XPOST http://127.0.0.1:3100/loki/api/v1/push \
+  -H 'content-type: application/json' \
+  --data "{\"streams\":[{\"stream\":{\"job\":\"api\",\"host\":\"web-1\",\"level\":\"error\"},
+           \"values\":[[\"$NOW\",\"FATAL: payment worker died\"]]}]}"
+```
+
+`204`, and the fake webhook prints a Slack blocks message: severity emoji, rule
+name, the matched line, and label chips. The first one carries **no link** —
+
+```
+_no query link: set PERMAFROST_UI_BASE_URL and wait for the first segment flush_
+```
+
+— because nothing has been announced yet. There is no ticket to link to until a
+segment exists. That is the expected cold-start behaviour, not a
+misconfiguration.
+
+**4. Wait for the flush.** The maintenance tick runs every 30 s; watch for:
+
+```
+INFO permafrost_collector::p2p: segment announced segment=hizq2ebg262l7v2yxvcvyevoawmaq5fnjleupe6dujr6t7t67ikq rows=1
+```
+
+Push a second matching line now and the alert carries a real deep link:
+
+```
+http://127.0.0.1:8080/#t=byd3vjnqbfemftx7i4nbh44yhgf4at77iplid2s5nmxy3i262gjqci3ior2ha4z2f4x…
+&from=1787973574475410944&to=1787974174475410944&labels=host%3Dweb-1%2Cjob%3Dapi%2Clevel%3Derror
+```
+
+The ticket sits in the **fragment**, so it never reaches the page's HTTP server;
+`from`/`to` bracket the match by ±5 minutes.
+
+**5. Open it.** Serve the page and paste the link into a browser:
+
+```bash
+python3 -m http.server 8080 --directory web
+```
+
+The page parses the ticket, dials the collector over iroh, pulls the manifest,
+fetches the matching segment, and opens a DuckDB SQL editor pre-filtered to the
+alert's labels and time window. Any static server works as long as it sends
+`.wasm` as `application/wasm` and speaks HTTP rather than `file://` — Python
+3.14's does both.
+
+**6. Tear down:** `Ctrl-C` the collector, `pkill -f fake-webhook.py`, `rm -rf demo`.
+
+### Going from the demo to real infrastructure
+
+| Demo | Real |
+|---|---|
+| `/tmp/fake-webhook.py` | `PERMAFROST_SLACK_WEBHOOK=https://hooks.slack.com/services/…` |
+| `python3 -m http.server` | the page from `web/` on any static host; set `PERMAFROST_UI_BASE_URL` to it |
+| `curl` pushes | promtail with one line changed — see [`deploy/promtail-example.yaml`](deploy/promtail-example.yaml) |
+| `--segment-max-age 5s` | drop it; the 1 h default is the intended setting |
+| local binary | `docker run` — see [`deploy/docker/README.md`](deploy/docker/README.md) |
+
+Only port 3100 needs to be reachable, and only by your log agents. The browser
+query path requires **no inbound port**: iroh dials out and falls back to a
+relay when UDP is blocked.
 
 ---
 
@@ -242,6 +392,19 @@ Named error enums per module via `thiserror`; no `anyhow` in library crates.
 - Integration test: spin collector on a port, push JSON batch, assert flush produces a segment readable by DuckDB (native `duckdb` crate, dev-dependency only).
 - Browser path: Playwright smoke test against the static page with a local collector + local iroh relay (`iroh-relay` binary) — CI-friendly, no public relay dependency.
 - No test touches Slack: dispatcher takes a `WebhookSink` trait; tests use a mock.
+
+**As built**, two of those five differ:
+
+- The DuckDB assertion shells out to the `duckdb` **CLI** rather than using the
+  native crate. The crate binds DuckDB 1.5.x against a locally installed
+  `libduckdb` 1.2.2 (ABI mismatch), and its `bundled` feature means a 10–15
+  minute C++ build on every clean CI run for one assertion. The Parquet
+  round-trip is asserted in-process with the `parquet` crate either way, and CI
+  installs the CLI so the DuckDB half never silently skips.
+- The Playwright smoke test is **not written** — the one stated deliverable that
+  is missing. `tests/fetch_protocol.rs` covers the same wire path natively
+  between two live iroh endpoints, and the page's query generation is checked
+  against a real spec-schema Parquet file, but nothing drives a browser.
 
 ---
 
