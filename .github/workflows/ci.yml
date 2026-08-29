@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The push -> Parquet -> DuckDB integration test asserts nothing about
+      # DuckDB unless the CLI is on PATH, so install it rather than let that
+      # half of the suite silently skip.
+      - name: install duckdb
+        run: |
+          curl -fsSL -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.2.2/duckdb_cli-linux-amd64.zip
+          unzip -q duckdb.zip -d "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: cargo test --workspace
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/web-node
+
+      # This crate is in the workspace `exclude` list, so the native job's
+      # `cargo fmt --all` never sees it.
+      - run: cargo fmt --manifest-path crates/web-node/Cargo.toml -- --check
+
+      # Ubuntu's clang targets wasm32 out of the box; `ring` (via iroh) needs it.
+      - run: sudo apt-get update && sudo apt-get install -y clang lld
+      - run: cargo check --manifest-path crates/web-node/Cargo.toml --target wasm32-unknown-unknown
+      - run: cargo clippy --manifest-path crates/web-node/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+
+  rules:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rule: [regex-match, hostile-loop]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt
+      - run: cargo fmt -- --check
+        working-directory: rules/examples/${{ matrix.rule }}
+      - run: cargo build --release --target wasm32-unknown-unknown
+        working-directory: rules/examples/${{ matrix.rule }}
+
+      # The matching logic is host-testable; only regex-match has such tests,
+      # and hostile-loop must never be run natively — it does not return.
+      - if: matrix.rule == 'regex-match'
+        run: cargo test
+        working-directory: rules/examples/${{ matrix.rule }}

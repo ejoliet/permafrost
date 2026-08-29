@@ -1,0 +1,8 @@
+# Nested too: rules/examples/*/target and crates/web-node/target are separate
+# cargo roots, and a bare `target/` would only match the one at the context root.
+**/target/
+web/vendor/
+.git/
+.github/
+.omc/
+data/

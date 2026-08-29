@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>permafrost — log explorer</title>
+<style>
+  :root {
+    --bg:        #0b1015;
+    --panel:     #121a22;
+    --panel-2:   #0e151c;
+    --border:    #23313f;
+    --border-hi: #33455a;
+    --text:      #dbe6f0;
+    --muted:     #7b8fa3;
+    --accent:    #4cc9f0;
+    --accent-dk: #12384a;
+    --ok:        #3ddc97;
+    --warn:      #ffb86b;
+    --err:       #ff6b6b;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------------------------------------------------------------- header */
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 18px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  .brand {
+    font-weight: 650;
+    letter-spacing: .02em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+  }
+  .brand .flake { color: var(--accent); font-size: 16px; }
+  .brand .sub {
+    color: var(--muted);
+    font-weight: 400;
+    font-size: 12px;
+    border-left: 1px solid var(--border-hi);
+    padding-left: 10px;
+    margin-left: 2px;
+  }
+
+  .spacer { flex: 1; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 11px 4px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--border-hi);
+    background: var(--panel);
+    color: var(--muted);
+    max-width: 46ch;
+  }
+  .pill .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    flex: none;
+  }
+  .pill .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill[data-state="pending"] { color: var(--warn);   border-color: #5a4327; }
+  .pill[data-state="ok"]      { color: var(--ok);     border-color: #235141; }
+  .pill[data-state="relay"]   { color: var(--accent); border-color: var(--accent-dk); }
+  .pill[data-state="error"]   { color: var(--err);    border-color: #5a2b2b; }
+  .pill[data-state="pending"] .dot { animation: pulse 1.1s ease-in-out infinite; }
+
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+  @media (prefers-reduced-motion: reduce) { .pill .dot { animation: none !important; } }
+
+  /* --------------------------------------------------------------- context */
+
+  .context {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 18px;
+    padding: 11px 18px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  .ctx-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  .ctx-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    color: var(--muted);
+  }
+
+  .ctx-window {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 3px 9px;
+  }
+  .ctx-window .arrow { color: var(--muted); padding: 0 5px; }
+  .ctx-window .dur { color: var(--muted); }
+
+  .chip {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 3px 9px;
+    border-radius: 5px;
+    background: var(--accent-dk);
+    border: 1px solid #1d5670;
+    color: #a5e4f7;
+    white-space: nowrap;
+  }
+  .chip .k { color: #6fb9d4; }
+  .chip .eq { color: var(--muted); padding: 0 1px; }
+  .chip--none {
+    background: var(--panel-2);
+    border-color: var(--border);
+    color: var(--muted);
+    font-family: var(--sans);
+    font-style: italic;
+  }
+
+  /* ---------------------------------------------------------------- banner */
+
+  .banner {
+    margin: 14px 18px 0;
+    padding: 12px 14px;
+    border-radius: 7px;
+    border: 1px solid #5a2b2b;
+    background: #1d1214;
+    color: #ffc9c9;
+    font-size: 13px;
+    flex: none;
+  }
+  .banner[hidden] { display: none; }
+  .banner h2 {
+    margin: 0 0 5px;
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--err);
+    letter-spacing: .01em;
+  }
+  .banner p { margin: 0 0 6px; }
+  .banner p:last-child { margin-bottom: 0; }
+  .banner code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: #2a1a1c;
+    border: 1px solid #4a2a2c;
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: #ffd9d9;
+    white-space: nowrap;
+  }
+  .banner--info { border-color: var(--border-hi); background: var(--panel); color: var(--text); }
+  .banner--info h2 { color: var(--accent); }
+  .banner--info code { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+
+  /* ---------------------------------------------------------------- editor */
+
+  main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 18px 18px;
+    gap: 12px;
+  }
+
+  .editor {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .editor-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .editor-head .ctx-label { flex: none; }
+  .editor-head .hint { font-size: 11.5px; color: var(--muted); }
+  .editor-head .hint kbd {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: var(--panel);
+    border: 1px solid var(--border-hi);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 0 4px;
+  }
+
+  textarea#sql {
+    width: 100%;
+    min-height: 148px;
+    resize: vertical;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border-hi);
+    border-radius: 7px;
+    padding: 12px 13px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    tab-size: 2;
+    outline: none;
+  }
+  textarea#sql:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(76, 201, 240, .13);
+  }
+  textarea#sql:disabled { opacity: .55; cursor: not-allowed; }
+
+  .actions { display: flex; align-items: center; gap: 10px; }
+
+  button {
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 7px 18px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  #run {
+    background: var(--accent);
+    color: #06222d;
+  }
+  #run:hover:not(:disabled) { background: #74d8f6; }
+
+  .ghost {
+    background: transparent;
+    border-color: var(--border-hi);
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+
+  /* ---------------------------------------------------------------- status */
+
+  .status {
+    flex: none;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--muted);
+    min-height: 19px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    word-break: break-word;
+  }
+  .status[data-state="error"] { color: var(--err); }
+  .status[data-state="ok"]    { color: var(--ok); }
+  .status[data-state="busy"]  { color: var(--warn); }
+  .status .sep { color: var(--border-hi); }
+
+  /* --------------------------------------------------------------- results */
+
+  .results {
+    flex: 1;
+    min-height: 160px;
+    overflow: auto;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+  }
+
+  .results .placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-height: 140px;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 24px;
+    text-align: center;
+  }
+
+  table {
+    border-collapse: separate;
+    border-spacing: 0;
+    width: 100%;
+    font-family: var(--mono);
+    font-size: 12.5px;
+  }
+
+  thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border-hi);
+    color: var(--accent);
+    font-weight: 600;
+    text-align: left;
+    padding: 8px 12px;
+    white-space: nowrap;
+  }
+  thead th .type {
+    display: block;
+    font-weight: 400;
+    font-size: 10.5px;
+    color: var(--muted);
+    letter-spacing: .03em;
+  }
+
+  tbody td {
+    border-bottom: 1px solid #18222c;
+    padding: 5px 12px;
+    vertical-align: top;
+    max-width: 90ch;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+  tbody tr:nth-child(even) { background: #0f161d; }
+  tbody tr:hover { background: #16222c; }
+
+  td.ts    { white-space: nowrap; color: #9fd3e8; }
+  td.num   { text-align: right; color: #c8b3f0; }
+  td.null  { color: #4d5d6d; font-style: italic; }
+
+  .truncated {
+    padding: 8px 12px;
+    color: var(--muted);
+    font-size: 12px;
+    font-family: var(--sans);
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+  }
+
+  footer {
+    flex: none;
+    padding: 8px 18px 12px;
+    color: var(--muted);
+    font-size: 11.5px;
+    border-top: 1px solid var(--border);
+  }
+  footer code { font-family: var(--mono); }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="flake" aria-hidden="true">&#10052;</span>
+    <span>permafrost</span>
+    <span class="sub">log explorer</span>
+  </div>
+  <div class="spacer"></div>
+  <div id="conn" class="pill" data-state="pending" role="status" aria-live="polite">
+    <span class="dot" aria-hidden="true"></span><span class="txt">connecting&hellip;</span>
+  </div>
+</header>
+
+<section class="context" id="context">
+  <div class="ctx-group">
+    <span class="ctx-label">Window</span>
+    <span class="ctx-window" id="window">&mdash;</span>
+  </div>
+  <div class="ctx-group">
+    <span class="ctx-label">Labels</span>
+    <span id="chips" class="ctx-group"></span>
+  </div>
+</section>
+
+<div class="banner" id="banner" role="alert" hidden></div>
+
+<main>
+  <div class="editor">
+    <div class="editor-head">
+      <span class="ctx-label">SQL</span>
+      <span class="hint">DuckDB-WASM, running entirely in this tab &mdash; <kbd>&#8984;</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> to run</span>
+    </div>
+    <textarea id="sql" spellcheck="false" autocapitalize="off" autocomplete="off"
+              aria-label="SQL query" disabled>-- waiting for segments...</textarea>
+    <div class="actions">
+      <button id="run" type="button" disabled>Run</button>
+      <button id="reset" type="button" class="ghost" disabled>Reset to alert query</button>
+    </div>
+  </div>
+
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+
+  <div class="results" id="results">
+    <div class="placeholder">No results yet.</div>
+  </div>
+</main>
+
+<footer>
+  Segments are fetched peer-to-peer over iroh and queried locally &mdash;
+  no query server, no data leaves this tab.
+</footer>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+[package]
+name = "permafrost-collector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Loki-compatible ingest that freezes logs into Parquet and serves them over iroh"
+
+[[bin]]
+name = "permafrost"
+path = "src/main.rs"
+
+[dependencies]
+permafrost-protocol = { path = "../protocol" }
+postcard = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "sync", "time"] }
+axum = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+toml = "0.9"
+humantime = "2"
+
+# Loki wire format: snappy-compressed protobuf, JSON fallback.
+prost = "0.14"
+snap = "1"
+
+# Segments.
+arrow = "59"
+parquet = { version = "59", features = ["zstd"] }
+
+# Rules.
+wasmtime = { version = "48", default-features = false, features = ["cranelift", "runtime", "std"] }
+notify = "8"
+
+# Transport + alerts.
+iroh = "1"
+iroh-blobs = "0.103"
+n0-future = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+tempfile = "3"
+# Rule host tests assemble fixtures inline instead of depending on the example
+# crates being compiled to wasm first.
+wat = "1"
+# Tests build a Config the same way main does, through the CLI parser.
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process"] }

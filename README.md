@@ -258,10 +258,10 @@ Named error enums per module via `thiserror`; no `anyhow` in library crates.
 
 ## Open Questions
 
-- [ ] Does `iroh-blobs` 1.x compile and run under wasm-bindgen today, or do we ship the `permafrost/fetch/1` fallback? **Resolve in Phase 1 spike before anything else.**
-- [ ] Public n0 relay bandwidth/fair-use limits for demo traffic — acceptable for a launch-day HN hug? If unclear, self-host `iroh-relay` on a small VM as part of launch prep.
-- [ ] DuckDB-WASM query over `Map` columns: confirm ergonomics (`labels['pod']`) in current version; if painful, promote more labels to columns at write time.
-- [ ] Segment encryption at rest (data dir) — defer or cheap win via age/XChaCha?
+- [x] **`iroh-blobs` under wasm-bindgen? No — we ship `permafrost/fetch/1`.** `iroh` 1.1 alone compiles clean for `wasm32-unknown-unknown`; `iroh-blobs` 0.103 pulls `FsStore` and a filesystem tag store with no browser equivalent. The collector serves both ALPNs, so native peers keep bao verified streaming and only the browser takes the simpler path. See the Phase 1 entry in `CLAUDE.md`.
+- [ ] **Deferred to launch prep:** public n0 relay bandwidth/fair-use limits for demo traffic. Nothing in the build depends on the answer; if it turns out to be tight, self-host `iroh-relay` on a small VM — the ticket already carries the relay URL, so it is a config change, not a code change.
+- [x] **DuckDB-WASM over `Map` columns: fine as is.** DuckDB 1.2.2 returns a scalar `VARCHAR` for `labels['pod']` and `NULL` for a missing key — no list unwrapping, no error. Asserted in `crates/collector/tests/push_to_duckdb.rs`. The promoted set stays `job`, `host`, `level`.
+- [ ] **Deferred:** segment encryption at rest. Not a cheap win — it would have to cover the iroh blob store as well as the Parquet files, or it protects nothing, and possession of a ticket is already read access in v1. Revisit together with ticket expiry.
 
 ---
 
@@ -291,12 +291,12 @@ Named error enums per module via `thiserror`; no `anyhow` in library crates.
 
 ### Acceptance Criteria
 
-- [ ] `cargo test --workspace` green; integration test covers push → Parquet → DuckDB read.
-- [ ] Real promtail (not just fixtures) pushes successfully with only a `url:` change.
-- [ ] Slack link → browser → query results in < 10 s on a ~50 MB segment over relay.
-- [ ] A rule compiled from the `rules/examples` template loads, fires, and a hostile infinite-loop rule is fuel-killed without ingest disruption.
-- [ ] Kill the collector's inbound firewall except iroh: browser link still works (proves no HTTP query path).
-- [ ] All Open Questions resolved or explicitly deferred in this README.
+- [x] `cargo test --workspace` green (55 tests); `tests/push_to_duckdb.rs` covers push → Parquet → DuckDB read, for both the JSON and the snappy-protobuf push formats, and `tests/fetch_protocol.rs` fetches an announced segment between two live iroh endpoints.
+- [ ] Real promtail (not just fixtures) pushes successfully with only a `url:` change. **Unverified** — needs a running collector and a promtail binary. `deploy/promtail-example.yaml` is the config to point at it.
+- [ ] Slack link → browser → query results in < 10 s on a ~50 MB segment over relay. **Unverified** — needs a deployment.
+- [x] A rule compiled from the `rules/examples` template loads, fires, and a hostile infinite-loop rule is fuel-killed without ingest disruption. Both halves asserted in `crates/collector/tests/rule_to_slack.rs` against the actual compiled `.wasm`.
+- [ ] Kill the collector's inbound firewall except iroh: browser link still works (proves no HTTP query path). **Unverified** — needs a deployment. By construction there is no HTTP query route: the collector serves only `/loki/api/v1/push`, `/ready` and `/metrics`.
+- [x] All Open Questions resolved or explicitly deferred above.
 
 ---
 

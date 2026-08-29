@@ -1,0 +1,11 @@
+target/
+data/
+*.parquet
+
+# Vendored browser dependencies, fetched by web/fetch-vendor.sh (~74 MB).
+web/vendor/duckdb/
+web/vendor/web_node/
+
+# Agent scratch state.
+.omc/
+implementation-notes.md
